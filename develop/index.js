@@ -1,4 +1,4 @@
-module.exports.html = `
+module.exports = html:`
 <!DOCTYPE html>
 <html>
 <head>
