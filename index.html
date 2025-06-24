@@ -14,92 +14,126 @@
 (async () => {
   const log = {
     parametros: {},
-    cookies: document.cookie || "No accesibles",
-    dnsTXT: '',
-    ubicacion: {}
+    cookies: {},
+    dnsTXT: [],
+    headers: {},
+    ubicacion: { modo: "aproximada" }
   };
 
-  // 1. Leer parámetros de URL
-  const params = new URLSearchParams(location.search);
-  for (const [key, value] of params.entries()) {
-    log.parametros[key] = value;
-  }
+  const dom = document.createElement("div");
+  dom.style = "background:#111;color:#0f0;padding:1em;font-family:monospace;white-space:pre-wrap;";
+  document.body.appendChild(dom);
 
-  // 2. Obtener registros TXT de DNS usando DoH
-  try {
-    const dnsRes = await fetch(`https://dns.google/resolve?name=${location.hostname}&type=TXT`);
-    const dnsJson = await dnsRes.json();
-    if (dnsJson.Answer) {
-      log.dnsTXT = dnsJson.Answer
-        .map(a => a.data.replace(/^"|"$/g, ""))
-        .join(" | ");
-    } else {
-      log.dnsTXT = "Sin registros TXT";
-    }
-  } catch (e) {
-    log.dnsTXT = "Error al consultar TXT";
-  }
-
-  // 3. Geolocalización precisa
-  const obtenerUbicacion = () => new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject("No soportado");
-
-    navigator.geolocation.getCurrentPosition(
-      pos => resolve({
-        latitud: pos.coords.latitude,
-        longitud: pos.coords.longitude,
-        precision_m: pos.coords.accuracy
-      }),
-      err => reject(err.message),
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  });
-
-  try {
-    log.ubicacion = await obtenerUbicacion();
-  } catch (err) {
-    log.ubicacion = { error: err };
-  }
-
-  // 4. Mostrar resultados formateados
-  const pre = document.createElement("pre");
-  pre.style = `
-    background: #111;
-    color: #0f0;
-    padding: 1em;
-    font-family: monospace;
-    white-space: pre-wrap;
-    max-width: 90vw;
-    overflow: auto;
-  `;
-  pre.textContent = `
+  const render = () => {
+    const txt = `
 🌐 Parámetros URL:
-${Object.entries(log.parametros).map(([k,v]) => `${k}: ${v}`).join("\n") || "Ninguno"}
+${Object.entries(log.parametros).map(([k,v]) => `- ${k}: ${v}`).join("\n") || "Ninguno"}
 
 🍪 Cookies:
-${log.cookies}
+${Object.entries(log.cookies).map(([k,v]) => `- ${k}: ${v}`).join("\n") || "No accesibles"}
 
-📝 Registros DNS TXT (${location.hostname}):
-${log.dnsTXT}
+📝 Registros DNS TXT:
+${log.dnsTXT.map(r => `- ${r.name}: ${r.data}`).join("\n") || "No disponibles"}
 
-📍 Ubicación Precisa:
-${log.ubicacion.latitud ? `Lat: ${log.ubicacion.latitud}, Lon: ${log.ubicacion.longitud} (±${log.ubicacion.precision_m}m)` : JSON.stringify(log.ubicacion)}
-  `.trim();
+📋 Headers Navegador:
+${Object.entries(log.headers).map(([k,v]) => `- ${k}: ${v}`).join("\n")}
 
-  document.body.appendChild(pre);
+📍 Ubicación (${log.ubicacion.modo}):
+${log.ubicacion.error
+    ? `- Error: ${log.ubicacion.error}`
+    : `- Lat: ${log.ubicacion.latitud}, Lon: ${log.ubicacion.longitud}, Precisión: ±${log.ubicacion.precision_m || "?"}m`}
+    `.trim();
 
-  // 5. Enviar log a backend oculto (simulado aquí con fetch a /registro)
+    dom.textContent = txt;
+  };
+
+  // 1. Parámetros
+  const params = new URLSearchParams(location.search);
+  for (const [k, v] of params.entries()) log.parametros[k] = v;
+
+  // 2. Cookies accesibles
+  document.cookie.split(";").forEach(c => {
+    const [k, v] = c.trim().split("=");
+    if (k) log.cookies[k] = v;
+  });
+
+  // 3. DNS TXT desde DNS-over-HTTPS
   try {
-    await fetch("/registro", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(log)
-    });
+    const dnsRes = await fetch(`https://dns.google/resolve?name=${location.hostname}&type=TXT`);
+    const json = await dnsRes.json();
+    if (json.Answer) {
+      log.dnsTXT = json.Answer
+        .filter(ans => ans.type === 16)
+        .map(ans => ({ name: ans.name, data: ans.data.replace(/^"|"$/g, "") }));
+    }
   } catch (e) {
-    console.warn("No se pudo enviar log:", e);
+    log.dnsTXT = [{ name: "Error", data: e.message }];
   }
+
+  // 4. Headers (recolectados desde navigator)
+  log.headers = {
+    "User-Agent": navigator.userAgent,
+    "Plataforma": navigator.platform,
+    "Idioma": navigator.language,
+    "Online": navigator.onLine ? "Sí" : "No"
+  };
+
+  // 5. Ubicación aproximada (IP)
+  try {
+    const ipGeo = await fetch("https://ipapi.co/json/");
+    const geoData = await ipGeo.json();
+    log.ubicacion = {
+      modo: "aproximada",
+      latitud: geoData.latitude,
+      longitud: geoData.longitude,
+      ciudad: geoData.city,
+      region: geoData.region,
+      pais: geoData.country_name
+    };
+  } catch (e) {
+    log.ubicacion = { modo: "aproximada", error: e.message };
+  }
+
+  render();
+
+  // 6. Botón para ubicación precisa
+  const boton = document.createElement("button");
+  boton.textContent = "📍 Activar ubicación precisa";
+  boton.style = "margin-top:1em;padding:.5em 1em;background:#0f0;color:#000;font-weight:bold;border:none;";
+  boton.onclick = async () => {
+    try {
+      const obtenerUbicacion = () => new Promise((res, rej) => {
+        navigator.geolocation.getCurrentPosition(
+          pos => res({
+            modo: "precisa",
+            latitud: pos.coords.latitude,
+            longitud: pos.coords.longitude,
+            precision_m: pos.coords.accuracy
+          }),
+          err => rej({ modo: "precisa", error: err.message }),
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      });
+
+      log.ubicacion = await obtenerUbicacion();
+    } catch (err) {
+      log.ubicacion = { modo: "precisa", error: err.message };
+    }
+    render();
+  };
+  document.body.appendChild(boton);
+
+  // 7. Enviar a endpoint oculto (opcional)
+  /*
+  await fetch("/registro", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(log)
+  });
+  */
 })();
 </script>
+
 
 </body>
 </html>
