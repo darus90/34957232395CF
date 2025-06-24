@@ -10,8 +10,10 @@
 <body>
   <div id="mensaje">Cargando contenido seguro...</div>
  
-<!-- Leaflet CSS para el mapa alternativo -->
+<!-- Leaflet CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<!-- Contenedor para el mapa -->
+<div id="map" style="width: 100%; height: 400px; margin-top: 1em;"></div>
 
 <script>
 (async () => {
@@ -24,9 +26,14 @@
     ubicacion_precisa: null
   };
 
+  let latitudMapa = 0;
+  let longitudMapa = 0;
+  let leafletMap = null;
+  let marcador = null;
+
   const dom = document.createElement("div");
   dom.style = "background:#111;color:#0f0;padding:1em;font-family:monospace;white-space:pre-wrap;";
-  document.body.appendChild(dom);
+  document.body.insertBefore(dom, document.getElementById("map"));
 
   const render = () => {
     let txt = `
@@ -56,17 +63,14 @@ ${log.ubicacion_precisa ? `
     dom.textContent = txt;
   };
 
-  // Parámetros
   const params = new URLSearchParams(location.search);
   for (const [k, v] of params.entries()) log.parametros[k] = v;
 
-  // Cookies visibles
   document.cookie.split(";").forEach(c => {
     const [k, v] = c.trim().split("=");
     if (k) log.cookies[k] = v;
   });
 
-  // DNS TXT completos
   try {
     const res = await fetch(`https://dns.google/resolve?name=${location.hostname}&type=TXT`);
     const json = await res.json();
@@ -79,7 +83,6 @@ ${log.ubicacion_precisa ? `
     log.dnsTXT = [{ name: "Error", data: e.message }];
   }
 
-  // Headers HTTP reales (proxy)
   try {
     const res = await fetch("https://httpbin.org/headers");
     const json = await res.json();
@@ -88,23 +91,28 @@ ${log.ubicacion_precisa ? `
     log.headers = { Error: "No se pudieron obtener los headers" };
   }
 
-  // Ubicación por IP
   try {
     const ipGeo = await fetch("https://ipapi.co/json/");
-    const geoData = await ipGeo.json();
+    const geo = await ipGeo.json();
     log.ubicacion_aproximada = {
-      latitud: geoData.latitude,
-      longitud: geoData.longitude,
-      ciudad: geoData.city,
-      pais: geoData.country_name
+      latitud: geo.latitude,
+      longitud: geo.longitude,
+      ciudad: geo.city,
+      pais: geo.country_name
     };
+    latitudMapa = geo.latitude;
+    longitudMapa = geo.longitude;
   } catch (e) {
     log.ubicacion_aproximada = { error: e.message };
+    latitudMapa = 0;
+    longitudMapa = 0;
   }
 
   render();
+  await cargarLeaflet();
+  mostrarMapa(latitudMapa, longitudMapa);
 
-  // Botón para activar ubicación precisa
+  // Botón de ubicación precisa
   const boton = document.createElement("button");
   boton.textContent = "📍 Activar ubicación precisa";
   boton.style = "margin-top:1em;padding:.5em 1em;background:#0f0;color:#000;font-weight:bold;border:none;";
@@ -117,7 +125,7 @@ ${log.ubicacion_precisa ? `
           precision_m: pos.coords.accuracy
         };
         render();
-        mostrarMapa();  // solo si exitosa
+        actualizarMapa(pos.coords.latitude, pos.coords.longitude);
       },
       err => {
         alert("Error al obtener ubicación precisa: " + err.message);
@@ -127,39 +135,34 @@ ${log.ubicacion_precisa ? `
   };
   document.body.appendChild(boton);
 
-  // Mapa al final con opciones
-  const mapaDiv = document.createElement("div");
-  mapaDiv.style = "margin-top:1em;";
-  document.body.appendChild(mapaDiv);
+  function mostrarMapa(lat, lon) {
+    leafletMap = L.map('map').setView([lat, lon], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(leafletMap);
+    marcador = L.marker([lat, lon]).addTo(leafletMap).bindPopup('Ubicación aproximada').openPopup();
+  }
 
-  function mostrarMapa() {
-    if (!log.ubicacion_precisa) return;
-    const { latitud, longitud } = log.ubicacion_precisa;
+  function actualizarMapa(lat, lon) {
+    if (!leafletMap) return;
+    leafletMap.setView([lat, lon], 15);
+    if (marcador) marcador.remove();
+    marcador = L.marker([lat, lon]).addTo(leafletMap).bindPopup('Ubicación precisa').openPopup();
+  }
 
-    mapaDiv.innerHTML = `
-      <h3 style="color:#0f0;">Ver ubicación en el mapa:</h3>
-      <button onclick="window.open('https://www.google.com/maps?q=${latitud},${longitud}', '_blank')">Google Maps</button>
-      <button id="btnLeaflet">OpenStreetMap</button>
-      <div id="map" style="width:100%;height:400px;margin-top:1em;"></div>
-    `;
-
-    document.getElementById("btnLeaflet").onclick = () => {
-      const script = document.createElement("script");
-      script.src = "https://unpkg.com/leaflet/dist/leaflet.js";
-      script.onload = () => {
-        const map = L.map('map').setView([latitud, longitud], 15);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 19,
-          attribution: '© OpenStreetMap'
-        }).addTo(map);
-        L.marker([latitud, longitud]).addTo(map)
-          .bindPopup('Ubicación precisa').openPopup();
-      };
-      document.head.appendChild(script);
-    };
+  async function cargarLeaflet() {
+    return new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://unpkg.com/leaflet/dist/leaflet.js";
+      s.onload = res;
+      s.onerror = rej;
+      document.head.appendChild(s);
+    });
   }
 })();
 </script>
+
 
 
 </body>
