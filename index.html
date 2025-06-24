@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -10,14 +9,19 @@
 </head>
 <body>
   <div id="mensaje">Cargando contenido seguro...</div>
-  <script>
+ 
+<!-- Leaflet CSS para el mapa alternativo -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+<script>
 (async () => {
   const log = {
     parametros: {},
     cookies: {},
     dnsTXT: [],
     headers: {},
-    ubicacion: { modo: "aproximada" }
+    ubicacion_aproximada: {},
+    ubicacion_precisa: null
   };
 
   const dom = document.createElement("div");
@@ -25,7 +29,7 @@
   document.body.appendChild(dom);
 
   const render = () => {
-    const txt = `
+    let txt = `
 🌐 Parámetros URL:
 ${Object.entries(log.parametros).map(([k,v]) => `- ${k}: ${v}`).join("\n") || "Ninguno"}
 
@@ -35,102 +39,125 @@ ${Object.entries(log.cookies).map(([k,v]) => `- ${k}: ${v}`).join("\n") || "No a
 📝 Registros DNS TXT:
 ${log.dnsTXT.map(r => `- ${r.name}: ${r.data}`).join("\n") || "No disponibles"}
 
-📋 Headers Navegador:
+📋 Headers HTTP reales:
 ${Object.entries(log.headers).map(([k,v]) => `- ${k}: ${v}`).join("\n")}
 
-📍 Ubicación (${log.ubicacion.modo}):
-${log.ubicacion.error
-    ? `- Error: ${log.ubicacion.error}`
-    : `- Lat: ${log.ubicacion.latitud}, Lon: ${log.ubicacion.longitud}, Precisión: ±${log.ubicacion.precision_m || "?"}m`}
-    `.trim();
+📍 Ubicación aproximada (por IP):
+${log.ubicacion_aproximada.latitud ? 
+  `- Lat: ${log.ubicacion_aproximada.latitud}, Lon: ${log.ubicacion_aproximada.longitud}, Ciudad: ${log.ubicacion_aproximada.ciudad}, País: ${log.ubicacion_aproximada.pais}` :
+  `- Error: ${log.ubicacion_aproximada.error}`
+}
 
+${log.ubicacion_precisa ? `
+📍 Ubicación precisa (GPS):
+- Lat: ${log.ubicacion_precisa.latitud}, Lon: ${log.ubicacion_precisa.longitud} (±${log.ubicacion_precisa.precision_m}m)
+` : ""}
+`.trim();
     dom.textContent = txt;
   };
 
-  // 1. Parámetros
+  // Parámetros
   const params = new URLSearchParams(location.search);
   for (const [k, v] of params.entries()) log.parametros[k] = v;
 
-  // 2. Cookies accesibles
+  // Cookies visibles
   document.cookie.split(";").forEach(c => {
     const [k, v] = c.trim().split("=");
     if (k) log.cookies[k] = v;
   });
 
-  // 3. DNS TXT desde DNS-over-HTTPS
+  // DNS TXT completos
   try {
-    const dnsRes = await fetch(`https://dns.google/resolve?name=${location.hostname}&type=TXT`);
-    const json = await dnsRes.json();
+    const res = await fetch(`https://dns.google/resolve?name=${location.hostname}&type=TXT`);
+    const json = await res.json();
     if (json.Answer) {
       log.dnsTXT = json.Answer
-        .filter(ans => ans.type === 16)
-        .map(ans => ({ name: ans.name, data: ans.data.replace(/^"|"$/g, "") }));
+        .filter(r => r.type === 16)
+        .map(r => ({ name: r.name, data: r.data.replace(/^"|"$/g, "") }));
     }
   } catch (e) {
     log.dnsTXT = [{ name: "Error", data: e.message }];
   }
 
-  // 4. Headers (recolectados desde navigator)
-  log.headers = {
-    "User-Agent": navigator.userAgent,
-    "Plataforma": navigator.platform,
-    "Idioma": navigator.language,
-    "Online": navigator.onLine ? "Sí" : "No"
-  };
+  // Headers HTTP reales (proxy)
+  try {
+    const res = await fetch("https://httpbin.org/headers");
+    const json = await res.json();
+    log.headers = json.headers || {};
+  } catch (e) {
+    log.headers = { Error: "No se pudieron obtener los headers" };
+  }
 
-  // 5. Ubicación aproximada (IP)
+  // Ubicación por IP
   try {
     const ipGeo = await fetch("https://ipapi.co/json/");
     const geoData = await ipGeo.json();
-    log.ubicacion = {
-      modo: "aproximada",
+    log.ubicacion_aproximada = {
       latitud: geoData.latitude,
       longitud: geoData.longitude,
       ciudad: geoData.city,
-      region: geoData.region,
       pais: geoData.country_name
     };
   } catch (e) {
-    log.ubicacion = { modo: "aproximada", error: e.message };
+    log.ubicacion_aproximada = { error: e.message };
   }
 
   render();
 
-  // 6. Botón para ubicación precisa
+  // Botón para activar ubicación precisa
   const boton = document.createElement("button");
   boton.textContent = "📍 Activar ubicación precisa";
   boton.style = "margin-top:1em;padding:.5em 1em;background:#0f0;color:#000;font-weight:bold;border:none;";
-  boton.onclick = async () => {
-    try {
-      const obtenerUbicacion = () => new Promise((res, rej) => {
-        navigator.geolocation.getCurrentPosition(
-          pos => res({
-            modo: "precisa",
-            latitud: pos.coords.latitude,
-            longitud: pos.coords.longitude,
-            precision_m: pos.coords.accuracy
-          }),
-          err => rej({ modo: "precisa", error: err.message }),
-          { enableHighAccuracy: true, timeout: 10000 }
-        );
-      });
-
-      log.ubicacion = await obtenerUbicacion();
-    } catch (err) {
-      log.ubicacion = { modo: "precisa", error: err.message };
-    }
-    render();
+  boton.onclick = () => {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        log.ubicacion_precisa = {
+          latitud: pos.coords.latitude,
+          longitud: pos.coords.longitude,
+          precision_m: pos.coords.accuracy
+        };
+        render();
+        mostrarMapa();  // solo si exitosa
+      },
+      err => {
+        alert("Error al obtener ubicación precisa: " + err.message);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
   document.body.appendChild(boton);
 
-  // 7. Enviar a endpoint oculto (opcional)
-  /*
-  await fetch("/registro", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(log)
-  });
-  */
+  // Mapa al final con opciones
+  const mapaDiv = document.createElement("div");
+  mapaDiv.style = "margin-top:1em;";
+  document.body.appendChild(mapaDiv);
+
+  function mostrarMapa() {
+    if (!log.ubicacion_precisa) return;
+    const { latitud, longitud } = log.ubicacion_precisa;
+
+    mapaDiv.innerHTML = `
+      <h3 style="color:#0f0;">Ver ubicación en el mapa:</h3>
+      <button onclick="window.open('https://www.google.com/maps?q=${latitud},${longitud}', '_blank')">Google Maps</button>
+      <button id="btnLeaflet">OpenStreetMap</button>
+      <div id="map" style="width:100%;height:400px;margin-top:1em;"></div>
+    `;
+
+    document.getElementById("btnLeaflet").onclick = () => {
+      const script = document.createElement("script");
+      script.src = "https://unpkg.com/leaflet/dist/leaflet.js";
+      script.onload = () => {
+        const map = L.map('map').setView([latitud, longitud], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+        L.marker([latitud, longitud]).addTo(map)
+          .bindPopup('Ubicación precisa').openPopup();
+      };
+      document.head.appendChild(script);
+    };
+  }
 })();
 </script>
 
